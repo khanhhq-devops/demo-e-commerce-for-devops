@@ -1,0 +1,138 @@
+variables:
+    DOCKER_IMAGE: ${REGISTRY_URL}/${REGISTRY_PROJECT}/${CI_PROJECT_NAME}:${CI_COMMIT_TAG}_${CI_COMMIT_SHORT_SHA}
+    USER: fullstack
+    FOLDER_DEPLOY: /home/fullstack/project-devops
+
+stages:
+    - build
+    - print_notification
+    - release
+    - deploy
+    - showlog
+
+build:
+    stage: build
+    variables:
+        GIT_STRATEGY: clone
+    script:
+        - >
+          if [[ "$CI_COMMIT_REF_NAME" =~ ^staging_([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+            echo "building Docker image for staging environment"
+            docker build  -t ${DOCKER_IMAGE} --build-arg BUILD_ENV=staging . > build.log 2>&1
+            cat build.log
+        
+          elif [[ "$CI_COMMIT_REF_NAME" =~ ^production_([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+            echo "buiding Docker image for production environment"
+            docker build  -t ${DOCKER_IMAGE} --build-arg BUILD_ENV=production . > build.log 2>&1 
+            cat build.log
+          else 
+            echo "invalid branch ($CI_COMMIT_REF_NAME) for buildding docker image"
+            exit 1
+          fi
+    tags:
+        - gitlab-server
+    only:
+        - tags
+    artifacts:
+        paths:
+            - build.log
+
+build_noti:
+    stage: print_notification
+    variables:
+        GIT_STRATEGY: none
+    script:
+      - build_content=$(cat build.log)
+      - |
+        project_info=$(cat <<EOF
+        ===Notification from the system===
+        Project ID: $CI_PROJECT_ID
+        Project name: $CI_PROJECT_NAME
+        Project URL: $CI_PROJECT_URL
+        Branch: $CI_COMMIT_REF_NAME
+        Commit: $CI_COMMIT_SHORT_SHA
+        EOF
+        )
+      - message="$build_content"\n\n"$project_info"
+      - echo $build_content
+      - if grep -q "ERROR" build.log; then curl -X POST
+         "https://api.telegram.org/bot${TOKEN_BOTFATHER}/sendMessage" -d "chat_id=$CHAT_ID&text=$message";exit 1
+        else
+          curl -X POST "https://api.telegram.org/bot${TOKEN_BOTFATHER}/sendMessage" -d "chat_id=$CHAT_ID&text=$message Build image success!";
+        fi
+    tags:
+        - gitlab-server
+    only:
+        - tags
+
+release:
+    stage: release
+    variables:
+        GIT_STRATEGY: none
+        CI_COMMIT_TAG: $CI_COMMIT_TAG  
+    before_script:
+        - docker login ${REGISTRY_URL} -u ${REGISTRY_USER} -p ${REGISTRY_PASSWORD}
+    script:
+        - docker push ${DOCKER_IMAGE}
+    tags:
+        - gitlab-server
+    only:
+        - tags
+
+deploy:
+    stage: deploy
+    when: manual
+    variables:
+        GIT_STRATEGY: none
+    before_script:
+        - docker login ${REGISTRY_URL} -u ${REGISTRY_USER} -p ${REGISTRY_PASSWORD}
+        - ssh-keyscan ${STAGING_SERVER_IP} >> ~/.ssh/known_hosts
+        - ssh-keyscan ${PRODUCTION_SERVER_IP} >> ~/.ssh/known_hosts
+        - chmod 644 ~/.ssh/known_hosts
+    script:
+        - >
+          if [ "$GITLAB_USER_LOGIN" == 'khanhhq' ]; then
+            
+            if [[ "$CI_COMMIT_REF_NAME" =~ ^staging_([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+                SSH_SERVER="${STAGING_SERVER_IP}"
+                SERVER_TAG="staging"
+                COMPOSE_FILE="staging.docker-compose.yml"
+            elif [[ "$CI_COMMIT_REF_NAME" =~ ^production_([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+                SSH_SERVER="${PRODUCTION_SERVER_IP}"
+                SERVER_TAG="production"
+                COMPOSE_FILE="production.docker-compose.yml"
+
+            else
+                echo "invalid branch or tag for deployment"
+                exit 1
+
+            fi
+            ssh fullstack@${SSH_SERVER} "
+               docker login ${REGISTRY_URL} -u ${REGISTRY_USER} -p ${REGISTRY_PASSWORD} &&
+               cd ${FOLDER_DEPLOY} &&
+               docker compose -f ${COMPOSE_FILE} down &&
+               docker image rm -f ${REGISTRY_URL}/${REGISTRY_PROJECT}/${CI_PROJECT_NAME}:${SERVER_TAG} &&
+               docker pull ${DOCKER_IMAGE} &&
+               docker tag ${DOCKER_IMAGE} ${REGISTRY_URL}/${REGISTRY_PROJECT}/${CI_PROJECT_NAME}:${SERVER_TAG} &&
+               docker image rm -f ${DOCKER_IMAGE} &&
+               docker compose -f ${COMPOSE_FILE} up -d "
+          else
+            echo "permission denied for deployment"
+            exit 1
+          fi
+    tags:
+        - gitlab-server
+    only:
+        - tags
+showlog:
+    stage: showlog
+    when: manual
+    variables:
+        GIT_STRATEGY: none
+    script:
+        - sleep 10s
+        - docker ps
+    tags:
+        - gitlab-server
+    only:
+        - tags

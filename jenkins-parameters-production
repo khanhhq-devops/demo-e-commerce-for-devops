@@ -1,0 +1,118 @@
+appType_Frontend = 'frontend'
+appType_Backend = 'backend'
+appUser = "fullstack"
+DOCKER_IMAGE_FRONTEND = "registry.project.pro.vn/gitlab-cicd/ecommerce-frontend"
+DOCKER_IMAGE_BACKEND = "registry.project.pro.vn/gitlab-cicd/ecommerce-backend"
+
+
+buildFrontend_Staging = "docker build -t ${DOCKER_IMAGE_FRONTEND}:production --build-arg BUILD_ENV=production ."
+buildBackend_Staging  = "docker build -t ${DOCKER_IMAGE_BACKEND}:production ."
+
+pushregistryFrontend_Staging = "docker push ${DOCKER_IMAGE_FRONTEND}:production"
+pushregistryBackend_Staging  = "docker push ${DOCKER_IMAGE_BACKEND}:production"
+
+folderDeploy = "/home/fullstack/project-devops"
+
+
+
+
+permissionScript = "sudo chown -R ${appUser}. ${folderDeploy}"
+stopScript = 'docker compose -f production.docker-compose.yml down'
+pullimage_Frontend = "docker pull ${DOCKER_IMAGE_FRONTEND}:production"
+pullimage_Backend = "docker pull ${DOCKER_IMAGE_BACKEND}:production"
+
+removeImage_Staging ="docker image rm -f ${DOCKER_IMAGE_FRONTEND}:production ${DOCKER_IMAGE_BACKEND}:production"
+
+
+runScript = 'docker compose -f production.docker-compose.yml up -d'
+
+
+withCredentials([usernamePassword(
+    credentialsId: 'registry.project.pro.vn',
+    usernameVariable: 'REGISTRY_USER',
+    passwordVariable: 'REGISTRY_PASSWORD'
+)]) {
+    loginScript = "docker login registry.project.pro.vn -u ${REGISTRY_USER} -p ${REGISTRY_PASSWORD}"
+    
+    prePullScript = """
+        ${loginScript} &&
+        sudo -u ${appUser} bash -c "
+             docker pull ${DOCKER_IMAGE_FRONTEND}:production &
+             docker pull ${DOCKER_IMAGE_BACKEND}:production &
+             wait
+             echo 'pre-pull done!'
+             "
+    """
+
+    deployScript = """
+        ${loginScript} &&
+        sudo -u ${appUser} bash -c "
+            cd ${folderDeploy} &&
+            docker compose -f production.docker-compose.yml down &&
+            docker image rm -f ${DOCKER_IMAGE_FRONTEND}:production ${DOCKER_IMAGE_BACKEND}:production &&
+            docker compose -f production.docker-compose.yml up -d
+        "
+    """
+
+    deployAfterRollBackScript = """
+        ${loginScript} &&
+        sudo -u ${appUser} bash -c "
+            cd ${folderDeploy} &&
+            ${permissionScript} &&
+            docker compose -f production.docker-compose.yml down &&
+            docker compose -f production.docker-compose.yml up -d
+        "
+    """
+}
+
+container_Frontend = 'khanhhqdevops.frontend'
+container_Backend = 'khanhhqdevops.backend'
+container_DB = 'khanhhqdevops.db'
+
+def prePullProcess() {
+    stage('pre-pull') {
+        sh(script: """ ${prePullScript} """, label: 'pre-pull images')
+    }
+}
+
+def startProcess() {
+    stage('start') {
+        sh(script: """ ${deployScript} """,label: 'deploy on staging server')
+        sleep 5
+        sh(script: """ docker ps """,label: 'check status')
+    }
+    echo("project Demo with server" + params.server + "started")
+}
+
+def stopProcess() {
+    stage('stop') {
+    def runningContainers = sh(script: 'sudo -u fullstack docker ps --format "{{.Names}}"', returnStdout: true).trim().split('\n')
+    def isFrontendRunning = container_Frontend in runningContainers
+    def isBackendRunning  = container_Backend  in runningContainers
+    def isDBRunning       = container_DB       in runningContainers
+    if(isFrontendRunning || isBackendRunning || isDBRunning) {
+           sh(script: """docker stop ${container_Frontend} ${container_Backend} ${container_DB}""" , label: 'stop containers')
+           sh(script: """docker rm ${container_Frontend} ${container_Backend} ${container_DB}""" , label : 'remove containers')
+           echo('Containers are remove and stop successfully.')
+       } else {
+           echo('No containers are stop')
+       }
+    echo ('Project demo with server' + params.server +'started')
+    }
+}
+
+node(params.server) {
+    currentBuild.displayName = params.action
+    if(params.action == "start") {
+        prePullProcess()
+        startProcess()
+    }
+    if(params.action == "stop") {
+        stopProcess()
+    }
+    if(params.action == "restart") {
+        stopProcess()
+        prePullProcess()
+        startProcess()
+    }
+}

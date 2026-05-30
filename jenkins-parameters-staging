@@ -1,0 +1,213 @@
+appType_Frontend = 'frontend'
+appType_Backend = 'backend'
+appUser = "fullstack"
+DOCKER_IMAGE_FRONTEND = "registry.project.pro.vn/gitlab-cicd/ecommerce-frontend"
+DOCKER_IMAGE_BACKEND = "registry.project.pro.vn/gitlab-cicd/ecommerce-backend"
+
+
+buildFrontend_Staging = "docker build -t ${DOCKER_IMAGE_FRONTEND}:staging --build-arg BUILD_ENV=staging ."
+buildBackend_Staging ="docker build -t ${DOCKER_IMAGE_BACKEND}:staging ."
+
+pushregistryFrontend_Staging = "docker push ${DOCKER_IMAGE_FRONTEND}:staging"
+pushregistryBackend_Staging = "docker push ${DOCKER_IMAGE_BACKEND}:staging"
+
+folderDeploy = "/home/fullstack/project-devops/run"
+folderBackup_Frontend = "/home/fullstack/project-devops/backup/frontend"
+folderBackup_Backend = "/home/fullstack/project-devops/backup/backend"
+folderMain = "/home/fullstack/project-devops"
+
+pathTo_Frontend = "/home/fullstack/source-code/frontend"
+pathTo_Backend = "/home/fullstack/source-code/backend"
+
+
+permissionScript = "sudo chown -R ${appUser}. ${folderDeploy}"
+stopScript = 'docker compose -f staging.docker-compose.yml down'
+pullimage_Frontend = "docker pull ${DOCKER_IMAGE_FRONTEND}:staging"
+pullimage_Backend = "docker pull ${DOCKER_IMAGE_BACKEND}:staging"
+
+removeImage_Staging ="docker image rm -f ${DOCKER_IMAGE_FRONTEND}:staging ${DOCKER_IMAGE_BACKEND}:staging"
+
+
+runScript = 'docker compose -f staging.docker-compose.yml up -d'
+
+
+withCredentials([usernamePassword(
+    credentialsId: 'registry.project.pro.vn',
+    usernameVariable: 'REGISTRY_USER',
+    passwordVariable: 'REGISTRY_PASSWORD'
+)]) {
+    loginScript = "docker login registry.project.pro.vn -u ${REGISTRY_USER} -p ${REGISTRY_PASSWORD}"
+
+    deployScript = """
+        ${loginScript} &&
+        sudo -u ${appUser} bash -c "
+            cd ${folderDeploy} &&
+            docker compose -f staging.docker-compose.yml down &&
+            docker image rm -f ${DOCKER_IMAGE_FRONTEND}:staging ${DOCKER_IMAGE_BACKEND}:staging ;
+            docker pull ${DOCKER_IMAGE_FRONTEND}:staging &&
+            docker pull ${DOCKER_IMAGE_BACKEND}:staging &&
+            docker compose -f staging.docker-compose.yml up -d
+        "
+    """
+
+    deployAfterRollBackScript = """
+        ${loginScript} &&
+        sudo -u ${appUser} bash -c "
+            cd ${folderDeploy} &&
+            ${permissionScript} &&
+            docker compose -f staging.docker-compose.yml down &&
+            docker compose -f staging.docker-compose.yml up -d
+        "
+    """
+}
+
+container_Frontend = 'khanhhqdevops.frontend'
+container_Backend = 'khanhhqdevops.backend'
+container_DB = 'khanhhqdevops.db'
+
+gitlink_Frontend = "http://gitlab.khanhdevops/ecommerce1/ecommerce-frontend.git"
+gitlink_Backend = "http://gitlab.khanhdevops/ecommerce/ecommerce-backend.git"
+
+
+def startProcess() {
+    stage('start') {
+        sh(script: """ hostname """, label: 'checkuser')
+        sh(script: """ ${deployScript} """ , label: 'deploy on staging server')
+        sleep 10
+        sh(script: """ docker ps """ , label: 'check status')
+    }
+    echo('Project demo with server ' + params.server + 'started')
+}
+
+def startAfterRollbackProcess() {
+    stage(' startAfterRollbackProcess') {
+        sh(script: """ ${deployAfterRollBackScript} """ , label: 'deploy on staging server after rollback')
+        sleep 10
+        sh(script: """ docker ps """ , label: 'check status')
+    }
+    echo('Project demo with server' + params.server + 'started')
+}
+def stopProcess() {
+    stage('stop'){
+       def RunningContainers = sh(script: 'docker ps --format "{{.Names}}"', returnStdout: true).trim().split('\n')
+       def isContainerFrontendRunning = container_Frontend in RunningContainers
+       def isContainerBackendRunning = container_Backend in RunningContainers
+       def isContainerDbRunning = container_DB in RunningContainers
+       if(isContainerFrontendRunning || isContainerBackendRunning || isContainerDbRunning) {
+           sh(script: """docker stop ${container_Frontend} ${container_Backend} ${container_DB}""" , label: 'stop containers')
+           sh(script: """docker rm ${container_Frontend} ${container_Backend} ${container_DB}""" , label : 'remove containers')
+           echo('Containers are remove and stop successfully.')
+       } else {
+           echo('No containers are stop')
+       }
+    }
+    echo ('Project demo with server' + params.server +'started')
+}
+def backupProcess(){
+    if(params.project == 'frontend') {
+        stage('backup') {
+            def imageExists = sh(
+                script: "docker image inspect ${DOCKER_IMAGE_FRONTEND}:staging > /dev/null 2>&1 && echo 'exists' || echo 'not_exists'",
+                returnStdout: true
+            ).trim()
+            
+            if(imageExists == 'exists') {
+                def timestamp = new Date().format('ddMMyyyy_HHmm')
+                sh(script: """sudo su ${appUser} -c "cd ${folderMain}; docker save -o ${folderBackup_Frontend}/${appType_Frontend}_${timestamp}.tar ${DOCKER_IMAGE_FRONTEND}:staging" """)
+            } else {
+                echo('No existing frontend image to backup, skipping...')
+            }
+        }
+    }
+    if(params.project == 'backend') {
+        stage('backup') {
+            def imageExists = sh(
+                script: "docker image inspect ${DOCKER_IMAGE_BACKEND}:staging > /dev/null 2>&1 && echo 'exists' || echo 'not_exists'",
+                returnStdout: true
+            ).trim()
+            
+            if(imageExists == 'exists') {
+                def timestamp = new Date().format('ddMMyyyy_HHmm')
+                sh(script: """sudo su ${appUser} -c "cd ${folderMain}; docker save -o ${folderBackup_Backend}/${appType_Backend}_${timestamp}.tar ${DOCKER_IMAGE_BACKEND}:staging" """)
+            } else {
+                echo('No existing backend image to backup, skipping...')
+            }
+        }
+    }
+}
+def upcodeProcess() {
+    if(params.project == 'frontend') {
+        stage('checkout staging branch') {
+        sh(script: 'rm -rf /home/fullstack/source-code/frontend/*')
+        checkout([$class: 'GitSCM', branches: [[name: params.hash]],
+                  userRemoteConfigs: [[credentialsId: 'jenkins-gitlab-user-account', url: gitlink_Frontend]]])
+        sh(script: 'chmod +x .env.*')
+        sh(script: """mv * ${pathTo_Frontend} """)
+    }
+    stage('build for staging') {
+        sh(script: """ ${loginScript} """ , label: 'login to registry')
+        sh(script: """whoami""" ,label: 'checkuser')
+        sh(script: """ cd ${pathTo_Frontend}; ls ; ${buildFrontend_Staging} """ ,label: 'build frontend project')
+        sh(script: """ ${pushregistryFrontend_Staging} """ ,label: 'push image to registry')
+        sh(script: """ ${removeImage_Staging}""" ,label: 'remove old images')
+    }
+    }
+    if(params.project == 'backend') {
+        stage('checkout staging branch') {
+             sh(script: 'rm -rf /home/fullstack/source-code/backend/*')
+        checkout([$class: 'GitSCM', branches: [[name: params.hash]],
+                  userRemoteConfigs: [[credentialsId: 'jenkins-gitlab-user-account', url: gitlink_Backend]]])
+        sh(script: 'chmod +x .env.*')
+        sh(script: """mv * ${pathTo_Backend} """)
+        }
+        stage(' build for staging') {
+          sh(script: """ ${loginScript} """ , label: 'login to registry')
+          sh(script: """whoami""" ,label: 'checkuser')
+          sh(script: """ cd ${pathTo_Backend}; ls ; ${buildBackend_Staging} """ ,label: 'build frontend project')
+          sh(script: """ ${pushregistryBackend_Staging} """ ,label: 'push image to registry')
+          sh(script: """ ${removeImage_Staging}""" ,label: 'remove old images')
+        }
+    }
+}
+def rollbackProcess() {
+    if(params.project == 'frontend') {
+        stage('rollback') {
+            if (!params.rollback_version || params.rollback_version.trim() == "") {
+                error "ROLLBACK FAILED: Không tìm thấy file backup nào được chọn trong rollback_version!"
+            }
+            sh(script: """ sudo su ${appUser} -c "cd ${folderDeploy}; docker image rm ${DOCKER_IMAGE_FRONTEND}:staging" """, label:'delete the image')
+            sh(script: """ sudo su ${appUser} -c 'cd ${folderBackup_Frontend}; docker load < ${params.rollback_version}' """, label: 'rollback version')
+        }
+    }
+    if(params.project == 'backend') {
+        stage('rollback') {
+            if (!params.rollback_version || params.rollback_version.trim() == "") {
+                error "ROLLBACK FAILED: Không tìm thấy file backup nào được chọn trong rollback_version!"
+            }
+            sh(script: """ sudo su ${appUser} -c "cd ${folderDeploy}; docker image rm ${DOCKER_IMAGE_BACKEND}:staging" """, label:'delete the image')
+            sh(script: """ sudo su ${appUser} -c 'cd ${folderBackup_Backend}; docker load < ${params.rollback_version}' """, label: 'rollback version')
+        }
+    }
+}
+
+node(params.server){
+    currentBuild.displayName = params.action
+    if(params.action == 'start') {
+        startProcess()
+    }
+    if (params.action == 'stop') {
+        stopProcess()
+    }
+    if (params.action == 'upcode') {
+        currentBuild.description = ' server ' + params.action + 'with hash' + params.hash
+        backupProcess()
+        stopProcess()
+        upcodeProcess()
+        startProcess()
+    }
+    if (params.action == 'rollback') {
+        stopProcess()
+        rollbackProcess()
+        startAfterRollbackProcess()
+    }
+}

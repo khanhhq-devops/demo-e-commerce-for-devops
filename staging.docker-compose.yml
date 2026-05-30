@@ -1,0 +1,32 @@
+version: '3.8
+
+services:
+  frontend:
+    container_name: khanhhqdevops.frontend
+    image: registry.project.pro.vn/gitlab-cicd/ecommerce-frontend:staging
+    restart: always
+    ports:
+      - "8080:8080"
+    depends_on:
+      - backend
+    networks:
+      my_network
+  backend:
+    container_name: khanhhqdevops.backend
+    image: registry.project.pro.vn/gitlab-cicd/ecommerce-backend:staging
+    ports:
+      - "5000:5000"
+    depends_on:
+      - db
+    networks:
+      - my_network
+  db:
+    container_name: khanhhqdevops.db
+    image: mongo:6.0
+    restart: always
+    volumes:
+      - ./docker/data/db:/data/db
+    networks:
+      - my_network
+networks:
+  - my_network
