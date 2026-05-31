@@ -43,7 +43,9 @@ Prometheus và Node Exporter cài trên production server thu thập metrics h�
 
 Ngưỡng cảnh báo: 
 CPU Usage > 80% -> alert: Telegram
+
 RAM Usage > 85% -> alert: Telegram
+
 Disk Usage > 90% -> alert: Telegram
 
 
