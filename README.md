@@ -42,6 +42,7 @@ Stop: dừng các container đang chạy
 Prometheus và Node Exporter cài trên production server thu thập metrics hệ thống. Grafana hiển thị dashboard trực quan. Alert gửi tự động qua Telegram.
 
 Ngưỡng cảnh báo: 
+
 CPU Usage > 80% -> alert: Telegram
 
 RAM Usage > 85% -> alert: Telegram
