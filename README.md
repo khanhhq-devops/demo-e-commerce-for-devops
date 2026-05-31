@@ -8,14 +8,23 @@ Dự án demo quy trình DevOps end-to-end bao gồm tự động hóa build, de
 🔄 CI/CD Flow chi tiết
 GitLab CI — Staging
 Tự động chạy khi push code lên nhánh staging:
+
 Build: build docker image frontend + backend
+
 print notification: gửi thông báo về telegram quá trình deploy
+
 release: push image lên Container registry(Harbor)
+
 deploy: deploy lên staging-server
+
 showlog: hiển thị log container sau khi deploy
 
 Gilab CI - Production
 Chỉ thực hiện sau khi satging ổn định:
 
 Build: build docker image frontend+backend
-Push: 
+
+Push: push image lên repo registry (Harbor)
+
+Jenkins - Staging
+Start: 
